@@ -1,4 +1,5 @@
-let profiles = JSON.parse(localStorage.getItem("profiles")) || {};
+let profiles = {};
+const API_BASE = "http://localhost:8080/api";
 let currentProfile = null;
 let editingExpenseId = null;
 let editingSavingsId = null;
@@ -95,8 +96,41 @@ function generateRecurringId() {
     return `rec_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
+async function apiRequest(path, options = {}) {
+    const response = await fetch(`${API_BASE}${path}`, {
+        headers: { "Content-Type": "application/json", ...(options.headers || {}) },
+        ...options
+    });
+    if (!response.ok) {
+        let message = `Request failed (${response.status})`;
+        try {
+            const body = await response.json();
+            message = body.message || (Array.isArray(body.messages) ? body.messages.join(", ") : message);
+        } catch (_) { }
+        throw new Error(message);
+    }
+    if (response.status === 204) return null;
+    return response.json();
+}
+
+async function loadProfileFromApi(profileId) {
+    const dashboard = await apiRequest(`/profiles/${encodeURIComponent(profileId)}/dashboard`);
+    profiles[profileId] = {
+        expenses: dashboard.recentExpenses || [],
+        budget: Number(dashboard.budget?.budget || 0),
+        recurringRules: dashboard.recurringRules || [],
+        goal: dashboard.savingsGoal || { amount: 0, days: 0, startDate: "", dailyTarget: 0 },
+        savingsEntries: dashboard.savingsEntries || [],
+        challenge: dashboard.challenge || { active: false, startDate: "", endDate: "", targetDays: 0 },
+        backendInsights: dashboard.insights || [],
+        backendCategoryTotals: dashboard.categoryTotals || [],
+        backendDashboard: dashboard
+    };
+    return profiles[profileId];
+}
+
 function saveProfiles() {
-    localStorage.setItem("profiles", JSON.stringify(profiles));
+    // Data is now persisted by the Spring Boot backend.
 }
 
 function escapeHtml(text) {
@@ -270,87 +304,94 @@ function normalizeProfiles() {
     if (changed) saveProfiles();
 }
 
-function createProfile() {
+async function createProfile() {
     const name = document.getElementById("profileName").value.trim();
     if (!name || profiles[name]) return;
-
-    profiles[name] = {
-        expenses: [],
-        budget: 0,
-        recurringRules: [],
-        goal: {
-            amount: 0,
-            days: 0,
-            startDate: "",
-            dailyTarget: 0
-        },
-        savingsEntries: [],
-        challenge: {
-            active: false,
-            startDate: "",
-            endDate: "",
-            targetDays: 0
-        }
-    };
-
-    saveProfiles();
-    currentProfile = name;
-    document.getElementById("profileName").value = "";
-    loadProfiles();
+    try {
+        await apiRequest("/profiles", { method: "POST", body: JSON.stringify({ name }) });
+        document.getElementById("profileName").value = "";
+        currentProfile = name;
+        await loadProfiles();
+    } catch (error) {
+        alert(error.message);
+    }
 }
 
-function loadProfiles() {
-    profileSelect.innerHTML = "";
-
-    for (const name in profiles) {
-        const option = document.createElement("option");
-        option.value = name;
-        option.textContent = name;
-        profileSelect.appendChild(option);
+async function loadProfiles() {
+    try {
+        const list = await apiRequest("/profiles");
+        profiles = {};
+        for (const item of list) {
+            profiles[item.id] = {
+                expenses: [], budget: Number(item.budget || 0), recurringRules: [],
+                goal: { amount: 0, days: 0, startDate: "", dailyTarget: 0 },
+                savingsEntries: [], challenge: { active: false, startDate: "", endDate: "", targetDays: 0 }
+            };
+        }
+        if (!currentProfile || !profiles[currentProfile]) {
+            currentProfile = Object.keys(profiles)[0] || null;
+        }
+        profileSelect.innerHTML = "";
+        for (const name of Object.keys(profiles)) {
+            const option = document.createElement("option");
+            option.value = name;
+            option.textContent = name;
+            profileSelect.appendChild(option);
+        }
+        profileSelect.value = currentProfile || "";
+        if (currentProfile) await loadProfileFromApi(currentProfile);
+        updateUI();
+    } catch (error) {
+        console.error(error);
+        clearProfileViews();
+        alert("Could not connect to the Java backend. Start Spring Boot on port 8080.");
     }
+}
 
-    if (!currentProfile && Object.keys(profiles).length > 0) {
-        currentProfile = Object.keys(profiles)[0];
-    }
-
-    profileSelect.value = currentProfile || "";
+async function refreshCurrentProfileFromApi() {
+    if (!currentProfile) return;
+    await loadProfileFromApi(currentProfile);
     updateUI();
 }
 
-function switchProfile() {
+async function switchProfile() {
     currentProfile = profileSelect.value;
     cancelEdit();
-    updateUI();
+    try {
+        await loadProfileFromApi(currentProfile);
+        updateUI();
+    } catch (error) {
+        alert(error.message);
+    }
 }
 
-function removeProfile() {
+async function removeProfile() {
     if (!currentProfile) return;
     const name = currentProfile;
     const confirmed = window.confirm(`Remove profile "${name}"? This cannot be undone.`);
     if (!confirmed) return;
-    delete profiles[name];
-    currentProfile = null;
-    saveProfiles();
-    loadProfiles();
+    try {
+        await apiRequest(`/profiles/${encodeURIComponent(name)}`, { method: "DELETE" });
+        currentProfile = null;
+        await loadProfiles();
+    } catch (error) {
+        alert(error.message);
+    }
 }
 
-function refreshProfileMonth() {
+async function refreshProfileMonth() {
     if (!currentProfile) return;
     const name = currentProfile;
     const confirmed = window.confirm(
         `Refresh "${name}" for a new month? This clears all expenses but keeps recurring rules, budget, and savings.`
     );
     if (!confirmed) return;
-
-    const profile = profiles[name];
-    ensureProfileShape(profile);
-    profile.expenses = [];
-    profile.recurringRules = (profile.recurringRules || []).map((rule) => ({
-        ...rule,
-        appliedPeriods: []
-    }));
-    saveProfiles();
-    updateUI();
+    try {
+        await apiRequest(`/profiles/${encodeURIComponent(name)}/refresh-month`, { method: "POST" });
+        await refreshCurrentProfileFromApi();
+    } catch (error) {
+        alert(error.message);
+    }
 }
 
 function getCategoryFromForm(categoryValue, customInput) {
@@ -425,45 +466,42 @@ function cancelEdit() {
     resetExpenseForm();
 }
 
-function addExpense() {
+async function addExpense() {
     if (!currentProfile) return;
     const payload = getExpensePayloadFromForm();
     if (!payload) return;
-
-    const profile = profiles[currentProfile];
-    ensureProfileShape(profile);
-
-    if (editingExpenseId) {
-        const expenseIndex = profile.expenses.findIndex((item) => item.id === editingExpenseId);
-        if (expenseIndex !== -1) {
-            profile.expenses[expenseIndex] = {
-                ...profile.expenses[expenseIndex],
-                ...payload
-            };
+    try {
+        if (editingExpenseId) {
+            await apiRequest(`/profiles/${encodeURIComponent(currentProfile)}/expenses/${encodeURIComponent(editingExpenseId)}`, {
+                method: "PUT", body: JSON.stringify(payload)
+            });
+        } else {
+            await apiRequest(`/profiles/${encodeURIComponent(currentProfile)}/expenses`, {
+                method: "POST", body: JSON.stringify(payload)
+            });
         }
-    } else {
-        profile.expenses.push({
-            id: generateExpenseId(),
-            ...payload,
-            recurringId: ""
-        });
+        await refreshCurrentProfileFromApi();
+        cancelEdit();
+    } catch (error) {
+        alert(error.message);
     }
-
-    saveProfiles();
-    cancelEdit();
-    updateUI();
 }
 
-function setBudget() {
+async function setBudget() {
     if (!currentProfile) return;
     const budget = parseFloat(document.getElementById("budgetInput").value);
-    profiles[currentProfile].budget = budget > 0 ? budget : 0;
-    document.getElementById("budgetInput").value = "";
-    saveProfiles();
-    updateUI();
+    try {
+        await apiRequest(`/profiles/${encodeURIComponent(currentProfile)}/budget`, {
+            method: "PUT", body: JSON.stringify({ budget: Number.isFinite(budget) ? budget : 0 })
+        });
+        document.getElementById("budgetInput").value = "";
+        await refreshCurrentProfileFromApi();
+    } catch (error) {
+        alert(error.message);
+    }
 }
 
-function setGoal() {
+async function setGoal() {
     if (!currentProfile) return;
     const goalAmount = parseFloat(document.getElementById("goalAmount").value);
     const days = parseFloat(document.getElementById("goalDays").value);
@@ -471,19 +509,15 @@ function setGoal() {
         goalInfoEl.textContent = "Enter valid goal amount and days.";
         return;
     }
-
-    const daily = goalAmount / days;
-    const profile = profiles[currentProfile];
-    ensureProfileShape(profile);
-    profile.goal = {
-        amount: goalAmount,
-        days,
-        startDate: todayDate(),
-        dailyTarget: daily
-    };
-    saveProfiles();
-    goalInfoEl.textContent = "You need to save ₹" + currencyFormatter.format(daily) + " per day.";
-    updateUI();
+    try {
+        const goal = await apiRequest(`/profiles/${encodeURIComponent(currentProfile)}/savings/goal`, {
+            method: "PUT", body: JSON.stringify({ amount: goalAmount, days })
+        });
+        goalInfoEl.textContent = "You need to save ₹" + currencyFormatter.format(goal.dailyTarget) + " per day.";
+        await refreshCurrentProfileFromApi();
+    } catch (error) {
+        alert(error.message);
+    }
 }
 
 function resetSavingsForm() {
@@ -498,100 +532,48 @@ function cancelSavingsEdit() {
     resetSavingsForm();
 }
 
-function addSavingsEntry() {
+async function addSavingsEntry() {
     if (!currentProfile) return;
     const amount = Number(savedAmountInput.value);
     const date = savedDateInput.value || todayDate();
     if (!amount || amount <= 0) return;
-
-    const profile = profiles[currentProfile];
-    ensureProfileShape(profile);
-    if (editingSavingsId) {
-        profile.savingsEntries = profile.savingsEntries.filter((entry) => entry.date !== editingSavingsId);
-        profile.savingsEntries.push({
-            id: `sav_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
-            amount,
-            date
+    try {
+        if (editingSavingsId) {
+            await apiRequest(`/profiles/${encodeURIComponent(currentProfile)}/savings?date=${encodeURIComponent(editingSavingsId)}`, { method: "DELETE" });
+        }
+        await apiRequest(`/profiles/${encodeURIComponent(currentProfile)}/savings`, {
+            method: "POST", body: JSON.stringify({ amount, date })
         });
-    } else {
-        profile.savingsEntries.push({
-            id: `sav_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
-            amount,
-            date
-        });
+        cancelSavingsEdit();
+        await refreshCurrentProfileFromApi();
+    } catch (error) {
+        alert(error.message);
     }
-    cancelSavingsEdit();
-    saveProfiles();
-    updateUI();
 }
 
-function addRecurringExpense() {
+async function addRecurringExpense() {
     if (!currentProfile) return;
-    const profile = profiles[currentProfile];
-    ensureProfileShape(profile);
-
     const name = recurringNameInput.value.trim();
     const amount = Number(recurringAmountInput.value);
     const paymentMethod = recurringPaymentMethodSelect.value;
     const dayOfMonth = Number(recurringDayInput.value);
-
     if (!name || !amount || amount <= 0 || !dayOfMonth || dayOfMonth < 1 || dayOfMonth > 31) return;
-
-    profile.recurringRules.push({
-        id: generateRecurringId(),
-        name,
-        amount,
-        category: "Recurring",
-        paymentMethod,
-        dayOfMonth,
-        note: name,
-        startDate: todayDate(),
-        appliedPeriods: []
-    });
-
-    recurringNameInput.value = "";
-    recurringAmountInput.value = "";
-    recurringDayInput.value = "";
-    recurringPaymentMethodSelect.value = "UPI";
-
-    saveProfiles();
-    updateUI();
+    try {
+        await apiRequest(`/profiles/${encodeURIComponent(currentProfile)}/recurring-rules`, {
+            method: "POST", body: JSON.stringify({ name, amount, paymentMethod, dayOfMonth })
+        });
+        recurringNameInput.value = "";
+        recurringAmountInput.value = "";
+        recurringDayInput.value = "";
+        recurringPaymentMethodSelect.value = "UPI";
+        await refreshCurrentProfileFromApi();
+    } catch (error) {
+        alert(error.message);
+    }
 }
 
 function applyRecurringExpenses(profile) {
-    if (!profile.recurringRules || profile.recurringRules.length === 0) return false;
-
-    const today = parseDate(todayDate());
-    let changed = false;
-
-    profile.recurringRules.forEach((rule) => {
-        const start = parseDate(rule.startDate || todayDate());
-        let iter = new Date(start.getFullYear(), start.getMonth(), 1);
-        const end = new Date(today.getFullYear(), today.getMonth(), 1);
-
-        while (iter <= end) {
-            const key = monthKey(iter);
-            const alreadyApplied = rule.appliedPeriods.includes(key);
-            const dueDate = dueDateForMonth(rule, iter.getFullYear(), iter.getMonth());
-            if (!alreadyApplied && dueDate <= today) {
-                profile.expenses.push({
-                    id: generateExpenseId(),
-                    amount: rule.amount,
-                    category: rule.category,
-                    date: formatDateISO(dueDate),
-                    note: `Auto: ${rule.name}`,
-                    paymentMethod: rule.paymentMethod,
-                    recurringId: rule.id
-                });
-                rule.appliedPeriods.push(key);
-                changed = true;
-            }
-
-            iter = new Date(iter.getFullYear(), iter.getMonth() + 1, 1);
-        }
-    });
-
-    return changed;
+    return false;
 }
 
 function updateBalance(profile) {
@@ -843,34 +825,28 @@ function renderChallenge(profile) {
     challengeStreakEl.textContent = `Current no-spend streak: ${stats.streak} day(s).`;
 }
 
-function startNoSpendChallenge() {
+async function startNoSpendChallenge() {
     if (!currentProfile) return;
     const duration = Number(challengeDaysInput.value);
     if (!duration || duration <= 0) return;
-
-    const profile = profiles[currentProfile];
-    ensureProfileShape(profile);
-    const start = parseDate(todayDate());
-    const end = addDays(start, duration - 1);
-
-    profile.challenge = {
-        active: true,
-        startDate: formatDateISO(start),
-        endDate: formatDateISO(end),
-        targetDays: duration
-    };
-
-    saveProfiles();
-    updateUI();
+    try {
+        await apiRequest(`/profiles/${encodeURIComponent(currentProfile)}/challenge`, {
+            method: "POST", body: JSON.stringify({ days: duration })
+        });
+        await refreshCurrentProfileFromApi();
+    } catch (error) {
+        alert(error.message);
+    }
 }
 
-function stopNoSpendChallenge() {
+async function stopNoSpendChallenge() {
     if (!currentProfile) return;
-    const profile = profiles[currentProfile];
-    ensureProfileShape(profile);
-    profile.challenge.active = false;
-    saveProfiles();
-    updateUI();
+    try {
+        await apiRequest(`/profiles/${encodeURIComponent(currentProfile)}/challenge/stop`, { method: "PATCH" });
+        await refreshCurrentProfileFromApi();
+    } catch (error) {
+        alert(error.message);
+    }
 }
 
 function generateInsights(profile) {
@@ -971,7 +947,9 @@ function generateInsights(profile) {
 }
 
 function renderInsights(profile) {
-    const insights = generateInsights(profile);
+    const insights = profile.backendInsights && profile.backendInsights.length
+        ? profile.backendInsights
+        : generateInsights(profile);
     insightsListEl.innerHTML = "";
 
     insights.forEach((insight) => {
@@ -1130,11 +1108,12 @@ expenseListEl.addEventListener("click", (event) => {
     if (!expenseId) return;
 
     if (target.classList.contains("delete-btn")) {
-        profiles[currentProfile].expenses =
-            profiles[currentProfile].expenses.filter((expense) => expense.id !== expenseId);
-        if (editingExpenseId === expenseId) cancelEdit();
-        saveProfiles();
-        updateUI();
+        apiRequest(`/profiles/${encodeURIComponent(currentProfile)}/expenses/${encodeURIComponent(expenseId)}`, { method: "DELETE" })
+            .then(async () => {
+                if (editingExpenseId === expenseId) cancelEdit();
+                await refreshCurrentProfileFromApi();
+            })
+            .catch((error) => alert(error.message));
         return;
     }
 
@@ -1151,10 +1130,9 @@ recurringListEl.addEventListener("click", (event) => {
     const recurringId = target.dataset.recurringId;
     if (!recurringId) return;
 
-    profiles[currentProfile].recurringRules =
-        profiles[currentProfile].recurringRules.filter((rule) => rule.id !== recurringId);
-    saveProfiles();
-    updateUI();
+    apiRequest(`/profiles/${encodeURIComponent(currentProfile)}/recurring-rules/${encodeURIComponent(recurringId)}`, { method: "DELETE" })
+        .then(() => refreshCurrentProfileFromApi())
+        .catch((error) => alert(error.message));
 });
 
 function clearFilters() {
@@ -1213,7 +1191,6 @@ expenseDateInput.value = todayDate();
 savedDateInput.value = todayDate();
 toggleCustomCategoryInput();
 toggleRecurringCustomCategoryInput();
-normalizeProfiles();
 loadProfiles();
 
 savingsListEl.addEventListener("click", (event) => {
@@ -1227,10 +1204,12 @@ savingsListEl.addEventListener("click", (event) => {
     if (!savingsDate) return;
 
     if (target.classList.contains("delete-btn")) {
-        profile.savingsEntries = profile.savingsEntries.filter((entry) => entry.date !== savingsDate);
-        if (editingSavingsId) cancelSavingsEdit();
-        saveProfiles();
-        updateUI();
+        apiRequest(`/profiles/${encodeURIComponent(currentProfile)}/savings?date=${encodeURIComponent(savingsDate)}`, { method: "DELETE" })
+            .then(async () => {
+                if (editingSavingsId) cancelSavingsEdit();
+                await refreshCurrentProfileFromApi();
+            })
+            .catch((error) => alert(error.message));
         return;
     }
 
