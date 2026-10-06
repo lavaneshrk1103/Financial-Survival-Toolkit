@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Financial Survival Toolkit</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+    <main class="app-shell">
+        <header class="app-header">
+            <p class="kicker">Personal Finance</p>
+            <h1>Financial Survival Toolkit</h1>
+            <p class="subtitle">Track spending, manage budgets, and stay on top of your savings goals.</p>
+        </header>
+
+        <section class="dashboard-grid">
+            <article class="card stat-card">
+                <p class="stat-label">Total Spent</p>
+                <h2 id="balanceDisplay">₹<span id="balance">0.00</span></h2>
+                <p id="budgetWarning" class="status-text"></p>
+                <div class="budget-progress-wrap">
+                    <div class="budget-progress-track">
+                        <div id="budgetProgressFill" class="budget-progress-fill"></div>
+                    </div>
+                    <div class="budget-progress-meta">
+                        <span id="budgetProgressPercent">0% used</span>
+                        <span id="budgetInsight">Set budget to see burn rate</span>
+                    </div>
+                </div>
+            </article>
+
+            <article class="card">
+                <h3>Profile</h3>
+                <label for="profileName">Create Profile</label>
+                <div class="inline-controls">
+                    <input type="text" id="profileName" placeholder="e.g. Personal">
+                    <button type="button" onclick="createProfile()">Create</button>
+                </div>
+                <label for="profileSelect">Current Profile</label>
+                <select id="profileSelect" onchange="switchProfile()"></select>
+                <div class="inline-controls">
+                    <button type="button" class="ghost-btn" onclick="refreshProfileMonth()">Refresh Month</button>
+                    <button type="button" class="ghost-btn danger-outline" onclick="removeProfile()">Remove Profile</button>
+                </div>
+            </article>
+        </section>
+
+        <section class="workspace-grid">
+            <article class="card">
+                <h3>Add Expense</h3>
+                <label for="amount">Amount</label>
+                <input type="number" id="amount" placeholder="0.00" min="0.01" step="0.01">
+                <p id="expenseAmountError" class="helper-text hidden"></p>
+                <label for="expenseDate">Date</label>
+                <input type="date" id="expenseDate">
+                <label for="category">Category</label>
+                <select id="category">
+                    <option value="Food">Food</option>
+                    <option value="Travel">Travel</option>
+                    <option value="Shopping">Shopping</option>
+                    <option value="Other">Other</option>
+                </select>
+                <label for="customCategory" id="customCategoryLabel" class="hidden">Custom Category</label>
+                <input type="text" id="customCategory" class="hidden" placeholder="Enter category name">
+                <label for="paymentMethod">Payment Method</label>
+                <select id="paymentMethod">
+                    <option value="UPI">UPI</option>
+                    <option value="Card">Card</option>
+                    <option value="Cash">Cash</option>
+                    <option value="Bank Transfer">Bank Transfer</option>
+                </select>
+                <label for="note">Note</label>
+                <input type="text" id="note" placeholder="Optional note">
+                <div class="inline-controls">
+                    <button id="expenseSubmitBtn" type="button" onclick="addExpense()">Add Expense</button>
+                    <button id="cancelEditBtn" type="button" class="ghost-btn hidden" onclick="cancelEdit()">Cancel</button>
+                </div>
+            </article>
+
+            <article class="card">
+                <h3>Smart Recurring Expenses</h3>
+                <label for="recurringName">Name</label>
+                <input type="text" id="recurringName" placeholder="e.g. Rent">
+                <label for="recurringAmount">Amount</label>
+                <input type="number" id="recurringAmount" placeholder="0.00">
+                <label for="recurringPaymentMethod">Payment Method</label>
+                <select id="recurringPaymentMethod">
+                    <option value="UPI">UPI</option>
+                    <option value="Card">Card</option>
+                    <option value="Cash">Cash</option>
+                    <option value="Bank Transfer">Bank Transfer</option>
+                </select>
+                <label for="recurringDay">Due Day (1-31)</label>
+                <input type="number" id="recurringDay" min="1" max="31" placeholder="1">
+                <button type="button" onclick="addRecurringExpense()">Add Recurring Rule</button>
+                <ul id="recurringList" class="compact-list"></ul>
+                <div class="recurring-output">
+                    <p class="helper-text"><strong>Recurring Output</strong></p>
+                    <p id="recurringMonthlyTotal" class="helper-text"></p>
+                </div>
+            </article>
+
+            <article class="card">
+                <h3>Set Monthly Budget</h3>
+                <label for="budgetInput">Budget</label>
+                <div class="inline-controls">
+                    <input type="number" id="budgetInput" placeholder="0.00">
+                    <button type="button" onclick="setBudget()">Save</button>
+                </div>
+            </article>
+
+            <article class="card">
+                <h3>Savings Goal</h3>
+                <label for="goalAmount">Goal Amount</label>
+                <input type="number" id="goalAmount" placeholder="0.00">
+                <label for="goalDays">Days to Save</label>
+                <input type="number" id="goalDays" placeholder="30">
+                <button type="button" onclick="setGoal()">Calculate Daily Target</button>
+                <p id="goalInfo" class="helper-text"></p>
+                <label for="savedAmount">Add Amount Saved</label>
+                <input type="number" id="savedAmount" placeholder="0.00">
+                <label for="savedDate">Date Saved</label>
+                <input type="date" id="savedDate">
+                <div class="inline-controls">
+                    <button id="savingsSubmitBtn" type="button" onclick="addSavingsEntry()">Add Saved Amount</button>
+                    <button id="savingsCancelBtn" type="button" class="ghost-btn hidden" onclick="cancelSavingsEdit()">Cancel</button>
+                </div>
+                <ul id="savingsList" class="compact-list"></ul>
+            </article>
+
+            <article class="card">
+                <h3>No-Spend Challenge</h3>
+                <label for="challengeDays">Challenge Length (days)</label>
+                <input type="number" id="challengeDays" min="1" placeholder="7">
+                <div class="inline-controls">
+                    <button type="button" onclick="startNoSpendChallenge()">Start Challenge</button>
+                    <button type="button" class="ghost-btn" onclick="stopNoSpendChallenge()">Stop</button>
+                </div>
+                <p id="challengeStatus" class="helper-text"></p>
+                <p id="challengeProgress" class="helper-text"></p>
+                <p id="challengeStreak" class="helper-text"></p>
+            </article>
+
+            <article class="card">
+                <h3>Savings Progress</h3>
+                <div id="goalStatusBanner" class="goal-banner hidden"></div>
+                <div class="goal-stats">
+                    <p id="goalTargetDisplay" class="helper-text"></p>
+                    <p id="goalRemainingDisplay" class="helper-text"></p>
+                    <p id="goalMonthlySummary" class="helper-text"></p>
+                </div>
+            </article>
+        </section>
+
+        <section class="dashboard-grid">
+            <article class="card">
+                <h3>Category Breakdown</h3>
+                <div class="chart-wrap">
+                    <canvas id="expenseChart"></canvas>
+                </div>
+            </article>
+
+            <article class="card">
+                <h3>Insights & Alerts</h3>
+                <ul id="insightsList" class="compact-list"></ul>
+            </article>
+
+            <article class="card">
+                <h3>Recent Expenses</h3>
+                <div class="filter-grid">
+                    <input type="text" id="searchInput" placeholder="Search by note, category, payment...">
+                    <select id="filterCategory">
+                        <option value="All">All categories</option>
+                    </select>
+                    <input type="date" id="filterStartDate">
+                    <input type="date" id="filterEndDate">
+                    <button id="clearFiltersBtn" type="button" class="ghost-btn">Clear Filters</button>
+                </div>
+                <ul id="expenseList" class="expense-list"></ul>
+            </article>
+            <article class="card">
+                <h3>Bill Calendar (Next 30 Days)</h3>
+                <ul id="billCalendarList" class="compact-list"></ul>
+            </article>
+        </section>
+    </main>
+
+    <script src="script.js"></script>
+</body>
+</html>
